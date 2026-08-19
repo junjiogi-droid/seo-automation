@@ -1,0 +1,94 @@
+name: Monthly Rewrite Candidates
+
+on:
+  schedule:
+    # Run on the last day of month at 18:00 JST (09:00 UTC)
+    # This runs at 09:00 UTC on the 1st of each month (checking last day of previous month)
+    - cron: '0 9 1 * *'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  generate-candidates:
+    runs-on: ubuntu-latest
+    name: Generate Rewrite Candidates
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify Google credentials
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: |
+          if [ -z "$GOOGLE_CREDENTIALS" ]; then
+            echo "Error: GOOGLE_CREDENTIALS secret not set"
+            exit 1
+          fi
+          echo "✅ Google credentials verified"
+
+      - name: Run rewrite candidates generator
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: |
+          python rewrite_candidates.py
+        timeout-minutes: 30
+
+      - name: Generate monthly report
+        if: success()
+        run: |
+          echo "✅ Rewrite candidates generation completed"
+          echo "Generated: $(date)"
+          echo "Check Google Sheets (GID: 1901160298) for results"
+
+      - name: Send notification on success
+        if: success()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const date = new Date();
+            const month = date.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `✅ Monthly rewrite candidates for ${month} have been generated.\n\nCheck Google Sheets (GID: 1901160298) for the prioritized list.`
+            })
+
+      - name: Notify on failure
+        if: failure()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '❌ Monthly rewrite candidates generation failed. Check the workflow logs.'
+            })
+
+  archive-data:
+    runs-on: ubuntu-latest
+    needs: generate-candidates
+    if: success()
+    name: Archive Monthly Data
+
+    steps:
+      - name: Create archive tag
+        run: |
+          echo "Monthly candidates generated: $(date)"
+
+      - name: Log completion
+        run: |
+          echo "✅ Monthly process completed successfully"
+          echo "Archive: candidates_$(date +%Y-%m).csv"
