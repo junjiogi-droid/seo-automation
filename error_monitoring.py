@@ -78,24 +78,16 @@ def fetch_crawl_errors(service, start_date: str, end_date: str) -> Dict[str, int
     try:
         error_types = {}
 
-        # Query parameters
-        request_body = {
-            'startDate': start_date,
-            'endDate': end_date,
-            'dimensions': ['errorType'],
-            'rowLimit': 1000
-        }
-
-        response = service.searchanalytics().query(
-            siteUrl=f'sc-domain:{DOMAIN}',
-            body=request_body
+        # Fetch crawl issues using the correct API endpoint
+        response = service.urlcrawlerrorscounts().query(
+            siteUrl=f'sc-domain:{DOMAIN}'
         ).execute()
 
-        if 'rows' in response:
-            for row in response['rows']:
-                error_type = row['keys'][0]
-                clicks = row.get('clicks', 0)
-                error_types[error_type] = error_types.get(error_type, 0) + int(clicks)
+        if 'countPerTypes' in response:
+            for error_entry in response['countPerTypes']:
+                error_type = error_entry.get('platform', 'Unknown')
+                count = error_entry.get('count', 0)
+                error_types[error_type] = error_types.get(error_type, 0) + int(count)
 
         return error_types
     except GoogleAPIError as e:
@@ -109,24 +101,16 @@ def fetch_crawl_errors(service, start_date: str, end_date: str) -> Dict[str, int
 def fetch_indexing_issues(service) -> Dict[str, Any]:
     """Fetch indexing issues from Search Console API."""
     try:
-        request_body = {
-            'startDate': (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d'),
-            'endDate': datetime.now().strftime('%Y-%m-%d'),
-            'dimensions': ['issueType'],
-            'rowLimit': 1000
-        }
-
-        response = service.searchanalytics().query(
-            siteUrl=f'sc-domain:{DOMAIN}',
-            body=request_body
+        # Fetch indexing issues using the correct API endpoint
+        response = service.indexingissues().list(
+            siteUrl=f'sc-domain:{DOMAIN}'
         ).execute()
 
         issues = {}
-        if 'rows' in response:
-            for row in response['rows']:
-                issue_type = row['keys'][0]
-                impressions = row.get('impressions', 0)
-                issues[issue_type] = issues.get(issue_type, 0) + int(impressions)
+        if 'issuesByType' in response:
+            for issue_type, issue_data in response['issuesByType'].items():
+                count = issue_data.get('issueCount', 0)
+                issues[issue_type] = count
 
         return issues
     except Exception as e:
