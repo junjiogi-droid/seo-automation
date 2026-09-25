@@ -53,29 +53,14 @@ jobs:
 
       - name: Send notification on success
         if: success()
-        uses: actions/github-script@v6
-        with:
-          script: |
-            const date = new Date();
-            const month = date.toLocaleString('en-US', { month: 'long', year: 'numeric' });
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `✅ Monthly rewrite candidates for ${month} have been generated.\n\nCheck Google Sheets (GID: 1901160298) for the prioritized list.`
-            })
+        run: |
+          echo "✅ Monthly rewrite candidates for $(date +'%B %Y') have been generated."
+          echo "Check Google Sheets (GID: 1901160298) for the prioritized list."
 
       - name: Notify on failure
         if: failure()
-        uses: actions/github-script@v6
-        with:
-          script: |
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: '❌ Monthly rewrite candidates generation failed. Check the workflow logs.'
-            })
+        run: |
+          echo "❌ Monthly rewrite candidates generation failed. Check the workflow logs."
 
   archive-data:
     runs-on: ubuntu-latest

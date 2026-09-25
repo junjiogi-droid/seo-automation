@@ -188,7 +188,7 @@ def clear_existing_data():
     try:
         client = get_gsheets_client()
         spreadsheet = client.open_by_key(SHEETS_ID)
-        worksheet = spreadsheet.get_worksheet(LOW_RANKING_GID)
+        worksheet = spreadsheet.get_worksheet_by_id(LOW_RANKING_GID)
 
         if worksheet:
             # Get all data and delete rows except header
@@ -207,7 +207,7 @@ def write_to_sheets(data: List[List[Any]]) -> bool:
     try:
         client = get_gsheets_client()
         spreadsheet = client.open_by_key(SHEETS_ID)
-        worksheet = spreadsheet.get_worksheet(LOW_RANKING_GID)
+        worksheet = spreadsheet.get_worksheet_by_id(LOW_RANKING_GID)
 
         if not worksheet:
             logger.error(f"Worksheet with GID {LOW_RANKING_GID} not found")
@@ -228,3 +228,49 @@ def write_to_sheets(data: List[List[Any]]) -> bool:
 def main():
     """Main execution function."""
     try:
+        logger.info("Starting low ranking keyword detection...")
+
+        # Calculate date ranges (last 7 days vs. the 7 days before that)
+        today = datetime.now()
+        current_end = today.strftime('%Y-%m-%d')
+        current_start = (today - timedelta(days=7)).strftime('%Y-%m-%d')
+        previous_end = (today - timedelta(days=8)).strftime('%Y-%m-%d')
+        previous_start = (today - timedelta(days=15)).strftime('%Y-%m-%d')
+
+        # Get Search Console client
+        sc_service = get_search_console_client()
+
+        # Fetch rankings
+        logger.info(f"Fetching current rankings from {current_start} to {current_end}")
+        current_rankings = fetch_rankings(sc_service, current_start, current_end)
+        logger.info(f"Fetching previous rankings from {previous_start} to {previous_end}")
+        previous_rankings = fetch_rankings(sc_service, previous_start, previous_end)
+
+        logger.info(f"Found {len(current_rankings)} current keywords")
+        logger.info(f"Found {len(previous_rankings)} previous keywords")
+
+        # Detect drops
+        drops = detect_drops(current_rankings, previous_rankings)
+        logger.info(f"Detected {len(drops)} keywords with ranking drops")
+
+        # Prepare and write data
+        sheet_data = prepare_sheet_data(drops)
+
+        if not clear_existing_data():
+            logger.error("Failed to clear existing data in Google Sheets")
+            return 1
+
+        if write_to_sheets(sheet_data):
+            logger.info("Low ranking detection completed successfully")
+            return 0
+        else:
+            logger.error("Failed to write data to Google Sheets")
+            return 1
+
+    except Exception as e:
+        logger.error(f"Fatal error in main: {e}")
+        return 1
+
+
+if __name__ == '__main__':
+    exit(main())

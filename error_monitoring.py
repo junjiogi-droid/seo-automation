@@ -139,7 +139,7 @@ def write_to_sheets(data: List[List[Any]]) -> bool:
     try:
         client = get_gsheets_client()
         spreadsheet = client.open_by_key(SHEETS_ID)
-        worksheet = spreadsheet.get_worksheet(ERROR_MONITORING_GID)
+        worksheet = spreadsheet.get_worksheet_by_id(ERROR_MONITORING_GID)
 
         if not worksheet:
             logger.error(f"Worksheet with GID {ERROR_MONITORING_GID} not found")

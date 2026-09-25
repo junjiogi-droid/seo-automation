@@ -254,7 +254,7 @@ def clear_existing_data():
     try:
         client = get_gsheets_client()
         spreadsheet = client.open_by_key(SHEETS_ID)
-        worksheet = spreadsheet.get_worksheet(REWRITE_CANDIDATES_GID)
+        worksheet = spreadsheet.get_worksheet_by_id(REWRITE_CANDIDATES_GID)
 
         if worksheet:
             all_values = worksheet.get_all_values()
@@ -272,7 +272,7 @@ def write_to_sheets(data: List[List[Any]]) -> bool:
     try:
         client = get_gsheets_client()
         spreadsheet = client.open_by_key(SHEETS_ID)
-        worksheet = spreadsheet.get_worksheet(REWRITE_CANDIDATES_GID)
+        worksheet = spreadsheet.get_worksheet_by_id(REWRITE_CANDIDATES_GID)
 
         if not worksheet:
             logger.error(f"Worksheet with GID {REWRITE_CANDIDATES_GID} not found")
