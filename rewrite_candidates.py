@@ -90,18 +90,7 @@ def fetch_all_queries(service, start_date: str, end_date: str) -> Dict[str, Dict
                 'endDate': end_date,
                 'dimensions': ['query', 'page'],
                 'rowLimit': page_size,
-                'startRow': start_index,
-                'dimensionFilterGroups': [
-                    {
-                        'filters': [
-                            {
-                                'dimension': 'impressions',
-                                'operator': 'GREATER_THAN',
-                                'expression': str(MIN_IMPRESSIONS)
-                            }
-                        ]
-                    }
-                ]
+                'startRow': start_index
             }
 
             response = service.searchanalytics().query(
@@ -116,6 +105,10 @@ def fetch_all_queries(service, start_date: str, end_date: str) -> Dict[str, Dict
                 query = row['keys'][0]
                 page_url = row['keys'][1]
                 position = row.get('position', 100)
+
+                # Search Console API cannot filter by metrics, so filter here
+                if row.get('impressions', 0) <= MIN_IMPRESSIONS:
+                    continue
 
                 if position >= MAX_RANKING_POSITION:  # Only interested in low-ranking keywords
                     key = f"{query}|{page_url}"

@@ -84,18 +84,7 @@ def fetch_rankings(service, start_date: str, end_date: str) -> Dict[str, Dict[st
             'startDate': start_date,
             'endDate': end_date,
             'dimensions': ['query'],
-            'rowLimit': 10000,  # Get top 10000 queries
-            'dimensionFilterGroups': [
-                {
-                    'filters': [
-                        {
-                            'dimension': 'impressions',
-                            'operator': 'GREATER_THAN',
-                            'expression': str(MIN_IMPRESSIONS)
-                        }
-                    ]
-                }
-            ]
+            'rowLimit': 10000  # Get top 10000 queries
         }
 
         response = service.searchanalytics().query(
@@ -105,6 +94,9 @@ def fetch_rankings(service, start_date: str, end_date: str) -> Dict[str, Dict[st
 
         if 'rows' in response:
             for row in response['rows']:
+                # Search Console API cannot filter by metrics, so filter here
+                if row.get('impressions', 0) <= MIN_IMPRESSIONS:
+                    continue
                 query = row['keys'][0]
                 keywords[query] = {
                     'impressions': row.get('impressions', 0),
