@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 DOMAIN = "junjiogiso.com"
 SHEETS_ID = "1WR8YGvvnOpRBxEgwEGbjCTPkk8kbu67Le8Xg4vrKVXU"
 LOW_RANKING_GID = 953824174
+HEADER = ['タイムスタンプ', 'キーワード', '前回順位', '今回順位', '順位変化', '表示回数', 'クリック数', 'CTR(%)', 'ステータス']
 
 RANKING_DROP_THRESHOLD = 5  # Keywords that dropped 5+ positions
 MIN_IMPRESSIONS = 10  # Minimum impressions to consider
@@ -176,18 +177,15 @@ def prepare_sheet_data(drops: List[Dict[str, Any]]) -> List[List[Any]]:
 
 
 def clear_existing_data():
-    """Clear existing data in the worksheet."""
+    """Clear the worksheet and write the header row."""
     try:
         client = get_gsheets_client()
         spreadsheet = client.open_by_key(SHEETS_ID)
         worksheet = spreadsheet.get_worksheet_by_id(LOW_RANKING_GID)
 
-        if worksheet:
-            # Get all data and delete rows except header
-            all_values = worksheet.get_all_values()
-            if len(all_values) > 1:
-                worksheet.delete_rows(2, len(all_values))
-                logger.info(f"Cleared {len(all_values) - 1} existing rows")
+        worksheet.clear()
+        worksheet.append_row(HEADER, value_input_option='USER_ENTERED')
+        logger.info("Cleared worksheet and wrote header row")
         return True
     except Exception as e:
         logger.error(f"Error clearing existing data: {e}")
