@@ -30,7 +30,7 @@ HEADER = ['タイムスタンプ', 'キーワード', 'URL', '現在順位', '�
 MAX_RANKING_POSITION = 30  # Keywords ranked below 30
 MIN_IMPRESSIONS = 10  # Minimum impressions to consider
 LOW_CTR_THRESHOLD = 1.0  # CTR below 1%
-WATCH_IMPRESSIONS_THRESHOLD = 30  # Impressions below this are marked 様子見
+WATCH_IMPRESSIONS_THRESHOLD = 20  # Impressions below this are marked 様子見
 EXCLUDED_URL_PATTERN = '/category/'  # Category pages are not rewrite targets
 
 # Google Sheets Scopes
