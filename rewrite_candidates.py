@@ -30,6 +30,8 @@ HEADER = ['タイムスタンプ', 'キーワード', 'URL', '現在順位', '�
 MAX_RANKING_POSITION = 30  # Keywords ranked below 30
 MIN_IMPRESSIONS = 10  # Minimum impressions to consider
 LOW_CTR_THRESHOLD = 1.0  # CTR below 1%
+WATCH_IMPRESSIONS_THRESHOLD = 30  # Impressions below this are marked 様子見
+EXCLUDED_URL_PATTERN = '/category/'  # Category pages are not rewrite targets
 
 # Google Sheets Scopes
 SCOPES = [
@@ -111,6 +113,9 @@ def fetch_all_queries(service, start_date: str, end_date: str) -> Dict[str, Dict
                 if row.get('impressions', 0) <= MIN_IMPRESSIONS:
                     continue
 
+                if EXCLUDED_URL_PATTERN in page_url:
+                    continue
+
                 if position >= MAX_RANKING_POSITION:  # Only interested in low-ranking keywords
                     key = f"{query}|{page_url}"
                     queries[key] = {
@@ -186,7 +191,7 @@ def prioritize_candidates(queries: Dict[str, Dict[str, Any]]) -> List[Dict[str, 
             'priority_score': priority_score,
             'priority_level': classify_priority(priority_score),
             'reason': generate_reason(ctr, position, impressions),
-            'status': 'Pending'
+            'status': '様子見' if impressions < WATCH_IMPRESSIONS_THRESHOLD else 'Pending'
         })
 
     # Sort by priority score (highest first)
