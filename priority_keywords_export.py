@@ -52,6 +52,9 @@ PRIORITY_KEYWORDS = [
     "ドライヤー ワット数",
     "ドライヤーワット数",
     "色落ちしにくいシャンプー",
+    # GSC records this query with a space - the no-space form above gets ~0
+    # impressions, so track both.
+    "色落ちしにくい シャンプー",
 ]
 
 SCOPES = [

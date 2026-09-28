@@ -43,10 +43,12 @@ ERROR_MONITORING_GID = 0
 REPORT_LAG_DAYS = 3
 BASELINE_DAYS = 7  # trailing window used to establish "normal" for a page
 
-# A page needs at least this much baseline traffic before a drop is worth
-# flagging - otherwise noise from low-volume pages dominates the sheet.
-MIN_BASELINE_CLICKS = 3
-MIN_BASELINE_IMPRESSIONS = 20
+# A metric needs at least this much baseline traffic (daily average over the
+# baseline window) before a drop in that metric is worth flagging. Each metric
+# is gated separately - otherwise pages averaging 0.1 clicks/day show up as
+# "100% drop" whenever they get 0 on a single day, which is just noise.
+MIN_BASELINE_CLICKS_PER_DAY = 1.0
+MIN_BASELINE_IMPRESSIONS_PER_DAY = 10.0
 DROP_THRESHOLD = 0.5  # flag if clicks or impressions fell 50%+ vs baseline daily avg
 
 # Google Sheets Scopes
@@ -142,11 +144,14 @@ def detect_drops(latest_day: Dict[str, Dict[str, float]],
 
         latest = latest_day.get(page_url, {'clicks': 0, 'impressions': 0})
 
-        if base['clicks'] < MIN_BASELINE_CLICKS and base['impressions'] < MIN_BASELINE_IMPRESSIONS:
-            continue  # too little baseline traffic to judge a "drop" meaningfully
+        # Only judge a metric if the page had enough of it to begin with
+        click_drop = 0
+        if base_clicks_avg >= MIN_BASELINE_CLICKS_PER_DAY:
+            click_drop = (base_clicks_avg - latest['clicks']) / base_clicks_avg
 
-        click_drop = (base_clicks_avg - latest['clicks']) / base_clicks_avg if base_clicks_avg > 0 else 0
-        impr_drop = (base_impr_avg - latest['impressions']) / base_impr_avg if base_impr_avg > 0 else 0
+        impr_drop = 0
+        if base_impr_avg >= MIN_BASELINE_IMPRESSIONS_PER_DAY:
+            impr_drop = (base_impr_avg - latest['impressions']) / base_impr_avg
 
         if click_drop >= DROP_THRESHOLD or impr_drop >= DROP_THRESHOLD:
             drops.append({
