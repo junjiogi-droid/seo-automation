@@ -1,7 +1,22 @@
 #!/usr/bin/env python3
 """
-Search Console Error Monitoring Script
-Monitors crawl errors, indexing issues, and other errors from Google Search Console
+Search Console Daily Monitoring Script
+
+NOTE (2026-09-28 fix): this used to call service.urlcrawlerrorscounts() and
+service.indexingissues() - both come from the old "Webmaster Tools API" and
+no longer exist on the Search Console API (webmasters v3). The current
+discovery document only exposes `searchanalytics`, `sitemaps` and `sites`;
+calling the old methods raised an AttributeError and made every scheduled
+run of this script fail (exit code 1). There is no direct API replacement
+for crawl-error / indexing-issue counts - that data now only lives in the
+Search Console UI's Coverage report.
+
+Rather than leave the daily job broken, it now does something GSC's API can
+actually answer: a day-over-day traffic-drop watcher. It compares each
+page's clicks/impressions for the most recent complete day against that
+page's trailing 7-day average and flags pages that fell off a cliff (e.g.
+a page that suddenly stopped getting clicks/impressions - which is usually
+a much stronger real-world signal than raw crawl-error counts anyway).
 """
 
 import json
@@ -10,7 +25,6 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any
 import logging
 
-from google.auth.transport.requests import Request
 from google.oauth2.service_account import Credentials
 from google.api_core.exceptions import GoogleAPIError
 from googleapiclient.discovery import build
@@ -24,6 +38,16 @@ logger = logging.getLogger(__name__)
 DOMAIN = "junjiogiso.com"
 SHEETS_ID = "1WR8YGvvnOpRBxEgwEGbjCTPkk8kbu67Le8Xg4vrKVXU"
 ERROR_MONITORING_GID = 0
+
+# GSC data has a ~2-3 day lag before it's complete.
+REPORT_LAG_DAYS = 3
+BASELINE_DAYS = 7  # trailing window used to establish "normal" for a page
+
+# A page needs at least this much baseline traffic before a drop is worth
+# flagging - otherwise noise from low-volume pages dominates the sheet.
+MIN_BASELINE_CLICKS = 3
+MIN_BASELINE_IMPRESSIONS = 20
+DROP_THRESHOLD = 0.5  # flag if clicks or impressions fell 50%+ vs baseline daily avg
 
 # Google Sheets Scopes
 SCOPES = [
@@ -63,73 +87,94 @@ def get_gsheets_client():
     return gspread.authorize(credentials)
 
 
-def fetch_crawl_errors(service, start_date: str, end_date: str) -> Dict[str, int]:
-    """
-    Fetch crawl errors from Search Console API.
-
-    Args:
-        service: Search Console API client
-        start_date: Start date (YYYY-MM-DD)
-        end_date: End date (YYYY-MM-DD)
-
-    Returns:
-        Dictionary of error types and counts
-    """
+def fetch_page_performance(service, start_date: str, end_date: str) -> Dict[str, Dict[str, float]]:
+    """Fetch per-page clicks/impressions for a date range (dimension = page)."""
     try:
-        error_types = {}
+        pages: Dict[str, Dict[str, float]] = {}
+        start_row = 0
+        page_size = 25000
 
-        # Fetch crawl issues using the correct API endpoint
-        response = service.urlcrawlerrorscounts().query(
-            siteUrl=f'sc-domain:{DOMAIN}'
-        ).execute()
+        while True:
+            response = service.searchanalytics().query(
+                siteUrl=f'sc-domain:{DOMAIN}',
+                body={
+                    'startDate': start_date,
+                    'endDate': end_date,
+                    'dimensions': ['page'],
+                    'rowLimit': page_size,
+                    'startRow': start_row,
+                }
+            ).execute()
 
-        if 'countPerTypes' in response:
-            for error_entry in response['countPerTypes']:
-                error_type = error_entry.get('platform', 'Unknown')
-                count = error_entry.get('count', 0)
-                error_types[error_type] = error_types.get(error_type, 0) + int(count)
+            rows = response.get('rows', [])
+            if not rows:
+                break
 
-        return error_types
+            for row in rows:
+                page_url = row['keys'][0]
+                pages[page_url] = {
+                    'clicks': row.get('clicks', 0),
+                    'impressions': row.get('impressions', 0),
+                }
+
+            if len(rows) < page_size:
+                break
+            start_row += page_size
+
+        return pages
     except GoogleAPIError as e:
-        logger.error(f"Google API error while fetching crawl errors: {e}")
+        logger.error(f"Google API error while fetching page performance: {e}")
         raise
     except Exception as e:
-        logger.error(f"Error fetching crawl errors: {e}")
+        logger.error(f"Error fetching page performance: {e}")
         raise
 
 
-def fetch_indexing_issues(service) -> Dict[str, Any]:
-    """Fetch indexing issues from Search Console API."""
-    try:
-        # Fetch indexing issues using the correct API endpoint
-        response = service.indexingissues().list(
-            siteUrl=f'sc-domain:{DOMAIN}'
-        ).execute()
+def detect_drops(latest_day: Dict[str, Dict[str, float]],
+                  baseline: Dict[str, Dict[str, float]],
+                  baseline_days: int) -> List[Dict[str, Any]]:
+    """Flag pages whose latest-day clicks/impressions fell sharply vs their trailing baseline average."""
+    drops = []
 
-        issues = {}
-        if 'issuesByType' in response:
-            for issue_type, issue_data in response['issuesByType'].items():
-                count = issue_data.get('issueCount', 0)
-                issues[issue_type] = count
+    for page_url, base in baseline.items():
+        base_clicks_avg = base['clicks'] / baseline_days
+        base_impr_avg = base['impressions'] / baseline_days
 
-        return issues
-    except Exception as e:
-        logger.error(f"Error fetching indexing issues: {e}")
-        return {}
+        latest = latest_day.get(page_url, {'clicks': 0, 'impressions': 0})
+
+        if base['clicks'] < MIN_BASELINE_CLICKS and base['impressions'] < MIN_BASELINE_IMPRESSIONS:
+            continue  # too little baseline traffic to judge a "drop" meaningfully
+
+        click_drop = (base_clicks_avg - latest['clicks']) / base_clicks_avg if base_clicks_avg > 0 else 0
+        impr_drop = (base_impr_avg - latest['impressions']) / base_impr_avg if base_impr_avg > 0 else 0
+
+        if click_drop >= DROP_THRESHOLD or impr_drop >= DROP_THRESHOLD:
+            drops.append({
+                'page_url': page_url,
+                'baseline_clicks_avg': round(base_clicks_avg, 1),
+                'latest_clicks': int(latest['clicks']),
+                'click_drop_pct': round(click_drop * 100, 1),
+                'baseline_impressions_avg': round(base_impr_avg, 1),
+                'latest_impressions': int(latest['impressions']),
+                'impression_drop_pct': round(impr_drop * 100, 1),
+            })
+
+    drops.sort(key=lambda d: max(d['click_drop_pct'], d['impression_drop_pct']), reverse=True)
+    return drops
 
 
-def prepare_error_data(crawl_errors: Dict[str, int], indexing_issues: Dict[str, int]) -> List[List[Any]]:
-    """Prepare error data for Google Sheets."""
+def prepare_error_data(drops: List[Dict[str, Any]]) -> List[List[Any]]:
+    """Prepare drop-alert data for Google Sheets (keeps the original 5-column shape)."""
     rows = []
     timestamp = datetime.now().isoformat()
 
-    # Add crawl errors
-    for error_type, count in crawl_errors.items():
-        rows.append([timestamp, 'Crawl Error', error_type, count, ''])
-
-    # Add indexing issues
-    for issue_type, count in indexing_issues.items():
-        rows.append([timestamp, 'Indexing Issue', issue_type, count, ''])
+    for d in drops:
+        if d['click_drop_pct'] >= DROP_THRESHOLD * 100:
+            note = f"クリック {d['baseline_clicks_avg']}/日 → {d['latest_clicks']}"
+            rows.append([timestamp, 'クリック急落', d['page_url'], f"{d['click_drop_pct']}%減", note])
+        if d['impression_drop_pct'] >= DROP_THRESHOLD * 100:
+            note = f"表示回数 {d['baseline_impressions_avg']}/日 → {d['latest_impressions']}"
+            rows.append([timestamp, '表示回数急落', d['page_url'], f"{d['impression_drop_pct']}%減", note])
 
     return rows
 
@@ -151,7 +196,7 @@ def write_to_sheets(data: List[List[Any]]) -> bool:
             logger.info(f"Successfully wrote {len(data)} rows to Google Sheets")
             return True
         else:
-            logger.info("No error data to write")
+            logger.info("No drops detected today - nothing to write")
             return True
     except Exception as e:
         logger.error(f"Error writing to Google Sheets: {e}")
@@ -161,35 +206,38 @@ def write_to_sheets(data: List[List[Any]]) -> bool:
 def main():
     """Main execution function."""
     try:
-        logger.info("Starting error monitoring...")
+        logger.info("Starting daily traffic-drop monitoring...")
 
-        # Calculate date range (last 7 days)
-        end_date = datetime.now().strftime('%Y-%m-%d')
-        start_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+        latest_day_end = (datetime.now() - timedelta(days=REPORT_LAG_DAYS)).strftime('%Y-%m-%d')
+        latest_day_start = latest_day_end
 
-        # Get Search Console client
+        baseline_end = (datetime.now() - timedelta(days=REPORT_LAG_DAYS + 1)).strftime('%Y-%m-%d')
+        baseline_start = (datetime.now() - timedelta(days=REPORT_LAG_DAYS + BASELINE_DAYS)).strftime('%Y-%m-%d')
+
         sc_service = get_search_console_client()
 
-        # Fetch errors
-        logger.info(f"Fetching errors from {start_date} to {end_date}")
-        crawl_errors = fetch_crawl_errors(sc_service, start_date, end_date)
-        indexing_issues = fetch_indexing_issues(sc_service)
+        logger.info(f"Fetching latest-day page performance: {latest_day_start}")
+        latest_day = fetch_page_performance(sc_service, latest_day_start, latest_day_end)
 
-        logger.info(f"Found {len(crawl_errors)} crawl error types")
-        logger.info(f"Found {len(indexing_issues)} indexing issue types")
+        logger.info(f"Fetching baseline page performance: {baseline_start}..{baseline_end}")
+        baseline = fetch_page_performance(sc_service, baseline_start, baseline_end)
 
-        # Prepare and write data
-        error_data = prepare_error_data(crawl_errors, indexing_issues)
+        logger.info(f"Latest day: {len(latest_day)} pages | Baseline: {len(baseline)} pages")
+
+        drops = detect_drops(latest_day, baseline, BASELINE_DAYS)
+        logger.info(f"Detected {len(drops)} pages with a significant drop")
+
+        error_data = prepare_error_data(drops)
 
         if write_to_sheets(error_data):
-            logger.info("Error monitoring completed successfully")
+            logger.info("Daily monitoring completed successfully")
             return 0
         else:
             logger.error("Failed to write data to Google Sheets")
             return 1
 
     except Exception as e:
-        logger.error(f"Error monitoring failed: {e}")
+        logger.error(f"Daily monitoring failed: {e}")
         return 1
 
 

@@ -32,11 +32,27 @@ jobs:
         run: |
           python low_ranking_detector.py
 
+      - name: Run priority keyword export
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: |
+          python priority_keywords_export.py
+
+      - name: Upload priority keyword CSV
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: priority-keywords-csv
+          path: data/priority_keywords_*.csv
+          retention-days: 90
+          if-no-files-found: ignore
+
       - name: Generate report
         if: success()
         run: |
           echo "✅ Ranking analysis completed"
-          echo "Check Google Sheets (GID: 953824174) for results"
+          echo "Check Google Sheets (GID: 953824174) for keyword drops"
+          echo "Check Google Sheets tab '優先KW週次' + the priority-keywords-csv artifact for the CTR tracking export"
 
       - name: Notify on failure
         if: failure()
