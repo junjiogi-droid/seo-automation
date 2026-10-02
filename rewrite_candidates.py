@@ -27,9 +27,10 @@ REWRITE_CANDIDATES_GID = 1901160298
 HEADER = ['タイムスタンプ', 'キーワード', 'URL', '現在順位', '表示回数', 'クリック数', 'CTR', '優先度', '優先スコア', '理由', 'ステータス']
 
 # Thresholds for rewrite candidates
-MAX_RANKING_POSITION = 30  # Keywords ranked below 30
+# Any position qualifies: page-1 keywords with 0 clicks are the cheapest wins (title/snippet fixes)
 MIN_IMPRESSIONS = 10  # Minimum impressions to consider
-LOW_CTR_THRESHOLD = 1.0  # CTR below 1%
+LOW_CTR_THRESHOLD = 1.0  # CTR below 1% (or 0 clicks) qualifies
+POSITION_SCORE_FLOOR = 50  # Positions at or beyond this get position score 0
 WATCH_IMPRESSIONS_THRESHOLD = 20  # Impressions below this are marked 様子見
 EXCLUDED_URL_PATTERN = '/category/'  # Category pages are not rewrite targets
 
@@ -110,13 +111,14 @@ def fetch_all_queries(service, start_date: str, end_date: str) -> Dict[str, Dict
                 position = row.get('position', 100)
 
                 # Search Console API cannot filter by metrics, so filter here
-                if row.get('impressions', 0) <= MIN_IMPRESSIONS:
+                if row.get('impressions', 0) < MIN_IMPRESSIONS:
                     continue
 
                 if EXCLUDED_URL_PATTERN in page_url:
                     continue
 
-                if position >= MAX_RANKING_POSITION:  # Only interested in low-ranking keywords
+                # Shown but barely clicked: 0 clicks or CTR below threshold, at any position
+                if row.get('clicks', 0) == 0 or row.get('ctr', 0) * 100 < LOW_CTR_THRESHOLD:
                     key = f"{query}|{page_url}"
                     queries[key] = {
                         'query': query,
@@ -149,7 +151,7 @@ def prioritize_candidates(queries: Dict[str, Dict[str, Any]]) -> List[Dict[str, 
 
     Criteria:
     1. Low CTR with decent impressions
-    2. Position between 11-30 (easy to improve)
+    2. Higher position (page 1 with no clicks = snippet fix, 11-30 = content fix)
     3. High impression count (potential traffic)
 
     Args:
@@ -164,17 +166,17 @@ def prioritize_candidates(queries: Dict[str, Dict[str, Any]]) -> List[Dict[str, 
         # Calculate priority score
         # Higher impressions = higher priority (more traffic potential)
         # Lower CTR = higher priority (room for improvement)
-        # Position 11-30 is better than 31+ (easier to rank)
+        # Higher position is better (closer to page 1 = easier to gain clicks)
 
         ctr = data['ctr'] * 100  # Convert to percentage
         impressions = data['impressions']
         position = data['position']
 
         # Priority formula
-        # Lower position (closer to 10) = higher score
+        # Higher position (closer to 1) = higher score
         # Higher impressions = higher score
         # Lower CTR = higher score
-        position_score = max(0, 30 - position) / 20  # 0-1 scale
+        position_score = max(0, POSITION_SCORE_FLOOR - position) / (POSITION_SCORE_FLOOR - 1)  # 0-1 scale
         impression_score = min(impressions / 100, 1.0)  # 0-1 scale (cap at 100 impressions)
         ctr_score = 1.0 - min(ctr / 5, 1.0)  # 0-1 scale (cap at 5% CTR)
 
@@ -190,7 +192,7 @@ def prioritize_candidates(queries: Dict[str, Dict[str, Any]]) -> List[Dict[str, 
             'ctr': ctr,
             'priority_score': priority_score,
             'priority_level': classify_priority(priority_score),
-            'reason': generate_reason(ctr, position, impressions),
+            'reason': generate_reason(ctr, int(data['clicks']), position, impressions),
             'status': '様子見' if impressions < WATCH_IMPRESSIONS_THRESHOLD else 'Pending'
         })
 
@@ -210,17 +212,23 @@ def classify_priority(score: float) -> str:
         return 'Low'
 
 
-def generate_reason(ctr: float, position: int, impressions: int) -> str:
+def generate_reason(ctr: float, clicks: int, position: float, impressions: int) -> str:
     """Generate reason for rewrite recommendation."""
     reasons = []
 
-    if ctr < LOW_CTR_THRESHOLD:
+    if clicks == 0:
+        reasons.append('Clicks 0')
+    elif ctr < LOW_CTR_THRESHOLD:
         reasons.append('Low CTR')
 
-    if 11 <= position <= 20:
+    if position < 11:
+        reasons.append('Position 1-10 (snippet)')
+    elif position < 21:
         reasons.append('Position 11-20')
-    elif 21 <= position <= 30:
+    elif position < 31:
         reasons.append('Position 21-30')
+    else:
+        reasons.append('Position 31+')
 
     if impressions > 50:
         reasons.append('High impressions')
@@ -308,7 +316,7 @@ def main():
         # Fetch all queries
         logger.info("Fetching all queries from Search Console...")
         all_queries = fetch_all_queries(sc_service, start_date, end_date)
-        logger.info(f"Found {len(all_queries)} potential candidates (position > 30)")
+        logger.info(f"Found {len(all_queries)} potential candidates (0 clicks or CTR < {LOW_CTR_THRESHOLD}%)")
 
         # Prioritize candidates
         logger.info("Prioritizing candidates...")
