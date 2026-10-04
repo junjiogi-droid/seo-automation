@@ -1,0 +1,39 @@
+name: Top Pages Monetization Audit
+
+on:
+  workflow_dispatch:  # Manual trigger only
+
+jobs:
+  top-pages-audit:
+    runs-on: ubuntu-latest
+    name: Audit Top Pages
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run top pages audit
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: |
+          python top_pages_export.py
+
+      - name: Upload top pages CSV
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: top-pages-csv
+          path: data/top_pages_*.csv
+          retention-days: 90
+          if-no-files-found: ignore
