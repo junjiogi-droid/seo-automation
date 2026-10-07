@@ -66,7 +66,11 @@ def get_credentials():
     try:
         creds_json = os.environ.get('GOOGLE_CREDENTIALS')
         if creds_json:
-            return Credentials.from_service_account_info(json.loads(creds_json), scopes=SCOPES)
+            info = json.loads(creds_json)
+            # Log which service account / project is in use (neither is a secret) so that
+            # permission problems can be matched against the GA4 and Cloud settings.
+            logger.info(f"Service account: {info.get('client_email')} (project_id: {info.get('project_id')})")
+            return Credentials.from_service_account_info(info, scopes=SCOPES)
         return Credentials.from_service_account_file('service-account.json', scopes=SCOPES)
     except Exception as e:
         logger.error(f"Failed to get credentials: {e}")
