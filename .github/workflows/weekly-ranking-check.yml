@@ -38,6 +38,24 @@ jobs:
         run: |
           python priority_keywords_export.py
 
+      - name: Run GA4 weekly export
+        # Non-fatal: if the service account has not been added to the GA4
+        # property yet, the Search Console steps above still count as success.
+        continue-on-error: true
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: |
+          python ga_weekly_export.py
+
+      - name: Upload GA4 pages CSV
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ga-pages-csv
+          path: data/ga_pages_*.csv
+          retention-days: 90
+          if-no-files-found: ignore
+
       - name: Upload priority keyword CSV
         if: always()
         uses: actions/upload-artifact@v4
@@ -53,6 +71,7 @@ jobs:
           echo "✅ Ranking analysis completed"
           echo "Check Google Sheets (GID: 953824174) for keyword drops"
           echo "Check Google Sheets tab '優先KW週次' + the priority-keywords-csv artifact for the CTR tracking export"
+          echo "Check Google Sheets tabs 'GA週次' / 'GAページ別' / 'GA外部リンク' for the GA4 export"
 
       - name: Notify on failure
         if: failure()
