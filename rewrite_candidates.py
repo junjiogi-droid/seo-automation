@@ -256,6 +256,33 @@ def prepare_sheet_data(candidates: List[Dict[str, Any]]) -> List[List[Any]]:
     return rows
 
 
+def write_rows_after_last(ws, rows):
+    """Write rows right after the last non-empty row in column A.
+
+    gspread's append_rows() relies on the Sheets "table" detection, which
+    kept writing at the same position (overwriting previous weeks) once the
+    tab was converted to a Sheets table. Computing the row ourselves avoids it.
+    """
+    if not rows:
+        return 0
+    start = len(ws.col_values(1)) + 1
+    end = start + len(rows) - 1
+    if end > ws.row_count:
+        ws.add_rows(end - ws.row_count)
+    ws.update(f'A{start}', rows, value_input_option='USER_ENTERED')
+    return start
+
+
+def rewrite_from_top(ws, rows):
+    """Clear the tab and write rows starting at A1."""
+    ws.clear()
+    if not rows:
+        return
+    if len(rows) > ws.row_count:
+        ws.add_rows(len(rows) - ws.row_count)
+    ws.update('A1', rows, value_input_option='USER_ENTERED')
+
+
 def clear_existing_data():
     """Clear the worksheet and write the header row."""
     try:
@@ -263,8 +290,7 @@ def clear_existing_data():
         spreadsheet = client.open_by_key(SHEETS_ID)
         worksheet = spreadsheet.get_worksheet_by_id(REWRITE_CANDIDATES_GID)
 
-        worksheet.clear()
-        worksheet.append_row(HEADER, value_input_option='USER_ENTERED')
+        rewrite_from_top(worksheet, [HEADER])
         logger.info("Cleared worksheet and wrote header row")
         return True
     except Exception as e:
@@ -288,7 +314,7 @@ def write_to_sheets(data: List[List[Any]]) -> bool:
             chunk_size = 1000
             for i in range(0, len(data), chunk_size):
                 chunk = data[i:i+chunk_size]
-                worksheet.append_rows(chunk, value_input_option='USER_ENTERED')
+                write_rows_after_last(worksheet, chunk)
                 logger.info(f"Wrote {len(chunk)} candidates to Google Sheets")
             return True
         else:

@@ -95,7 +95,7 @@ def run_report(service, start: str, end: str, dimensions: List[str], metrics: Li
     try:
         response = service.properties().runReport(
             property=f'properties/{GA_PROPERTY_ID}', body=body
-        ).execute()
+        ).execute(num_retries=5)  # retry transient 5xx (e.g. 502 Bad Gateway on 2026-11-13)
     except HttpError as e:
         if e.resp.status in (401, 403):
             logger.error(
@@ -182,6 +182,33 @@ def collect_page_rows(service, start: str, end: str, clicks: List[Dict[str, Any]
     return rows
 
 
+def write_rows_after_last(ws, rows):
+    """Write rows right after the last non-empty row in column A.
+
+    gspread's append_rows() relies on the Sheets "table" detection, which
+    kept writing at the same position (overwriting previous weeks) once the
+    tab was converted to a Sheets table. Computing the row ourselves avoids it.
+    """
+    if not rows:
+        return 0
+    start = len(ws.col_values(1)) + 1
+    end = start + len(rows) - 1
+    if end > ws.row_count:
+        ws.add_rows(end - ws.row_count)
+    ws.update(f'A{start}', rows, value_input_option='USER_ENTERED')
+    return start
+
+
+def rewrite_from_top(ws, rows):
+    """Clear the tab and write rows starting at A1."""
+    ws.clear()
+    if not rows:
+        return
+    if len(rows) > ws.row_count:
+        ws.add_rows(len(rows) - ws.row_count)
+    ws.update('A1', rows, value_input_option='USER_ENTERED')
+
+
 def get_or_create_worksheet(spreadsheet, title: str, header: List[str]):
     try:
         return spreadsheet.worksheet(title)
@@ -208,7 +235,7 @@ def write_to_sheets(weekly_rows, page_rows, link_rows) -> bool:
         spreadsheet = gspread.authorize(get_credentials()).open_by_key(SHEETS_ID)
 
         weekly_ws = get_or_create_worksheet(spreadsheet, WEEKLY_SHEET_TITLE, WEEKLY_HEADER)
-        weekly_ws.append_rows(weekly_rows, value_input_option='USER_ENTERED')
+        write_rows_after_last(weekly_ws, weekly_rows)
         logger.info(f"Wrote {len(weekly_rows)} rows to '{WEEKLY_SHEET_TITLE}'")
 
         for title, header, rows in (
@@ -216,8 +243,7 @@ def write_to_sheets(weekly_rows, page_rows, link_rows) -> bool:
             (LINKS_SHEET_TITLE, LINKS_HEADER, link_rows),
         ):
             ws = get_or_create_worksheet(spreadsheet, title, header)
-            ws.clear()
-            ws.append_rows([header] + rows, value_input_option='USER_ENTERED')
+            rewrite_from_top(ws, [header] + rows)
             logger.info(f"Wrote {len(rows)} rows to '{title}'")
         return True
     except Exception as e:
